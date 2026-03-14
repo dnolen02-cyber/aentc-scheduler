@@ -1,0 +1,17 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "RAILPACK",
+    "buildCommand": "npm install && cd client && npm install && cd .. && npm run build"
+  },
+  "deploy": {
+    "runtime": "V2",
+    "startCommand": "NODE_ENV=production node server/index.js",
+    "numReplicas": 1,
+    "sleepApplication": false,
+    "useLegacyStacker": false,
+    "ipv6EgressEnabled": false,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  }
+}
