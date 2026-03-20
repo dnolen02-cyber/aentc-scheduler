@@ -40,6 +40,16 @@ EXCLUDED PROVIDERS:
 • [Provider Name] — [brief reason: insurance restriction, age restriction, complaint outside scope, etc.]
 (Only list providers who would normally be relevant to this complaint but cannot see this specific patient.)
 
+⚠️ BEFORE FINALIZING YOUR RESPONSE, VERIFY EACH LISTED PROVIDER AGAINST THIS CHECKLIST:
+□ Does this provider's scope cover the patient's complaint? (If not → move to EXCLUDED)
+□ Does this provider accept the patient's insurance? (If not → move to EXCLUDED)
+□ Does this provider see this patient's age group? (If not → move to EXCLUDED)
+□ Does this provider see this patient type (new vs established)? (If not → move to EXCLUDED)
+□ Is this provider available at the requested location, or is location flexible? (If not → move to EXCLUDED)
+□ Are MDs listed before mid-levels (unless established patient named a specific mid-level)?
+□ Is the provider count on Line 1 accurate after applying all exclusions?
+Do NOT include any provider in the numbered list unless they pass ALL applicable checks above.
+
 ALWAYS end your response with this exact JSON block on its own line (the frontend strips it before display):
 {"_meta":{"recommended_provider":"[Full name of the #1 provider on the list]","recommended_location":"[Their location]","is_sinus_allergy":[true or false],"all_qualifying_providers":["Full Name 1","Full Name 2"]}}`;
 
@@ -125,6 +135,7 @@ async function queryScheduler(messages, rankingContext) {
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 2048,
+    temperature: 0,
     system: systemPrompt,
     messages,
   });
