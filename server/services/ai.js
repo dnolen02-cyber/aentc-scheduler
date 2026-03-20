@@ -47,6 +47,7 @@ EXCLUDED PROVIDERS:
 □ Does this provider see this patient type (new vs established)? (If not → move to EXCLUDED)
 □ Is this provider available at the requested location, or is location flexible? (If not → move to EXCLUDED)
 □ Are MDs listed before mid-levels (unless established patient named a specific mid-level)?
+□ Within each tier, are providers sorted by fewest recommendations today (per LOAD BALANCING CONTEXT)? Providers with 0 recommendations must appear before any provider with 1+.
 □ Is the provider count on Line 1 accurate after applying all exclusions?
 Do NOT include any provider in the numbered list unless they pass ALL applicable checks above.
 
