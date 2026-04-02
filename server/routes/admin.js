@@ -5,7 +5,7 @@ const authenticate = require('../middleware/authenticate');
 const { hashPassword } = require('../auth');
 const { db } = require('../db');
 
-// ── Admin guard middleware ─────────────────────────────────────────────────────
+// ── Admin guard ───────────────────────────────────────────────────────────────
 
 function requireAdmin(req, res, next) {
   authenticate(req, res, () => {
@@ -16,9 +16,8 @@ function requireAdmin(req, res, next) {
   });
 }
 
-// ══ Scheduling Rules ══════════════════════════════════════════════════════════
+// ══ Scheduling Rules (global / audiogram reference — admin-editable) ══════════
 
-// GET /api/admin/rules  — all sections ordered by id
 router.get('/rules', requireAdmin, (req, res) => {
   const rows = db
     .prepare('SELECT id, rule_key, rule_text, updated_at, updated_by FROM scheduling_rules ORDER BY id ASC')
@@ -26,12 +25,9 @@ router.get('/rules', requireAdmin, (req, res) => {
   res.json(rows);
 });
 
-// PUT /api/admin/rules/:key  — update one section's text
 router.put('/rules/:key', requireAdmin, (req, res) => {
   const { rule_text } = req.body;
-  if (rule_text === undefined) {
-    return res.status(400).json({ error: 'rule_text is required' });
-  }
+  if (rule_text === undefined) return res.status(400).json({ error: 'rule_text is required' });
 
   const existing = db.prepare('SELECT id FROM scheduling_rules WHERE rule_key = ?').get(req.params.key);
   if (!existing) return res.status(404).json({ error: 'Rule section not found' });
@@ -48,90 +44,325 @@ router.put('/rules/:key', requireAdmin, (req, res) => {
   res.json(updated);
 });
 
-// ══ Condition Mappings ════════════════════════════════════════════════════════
+// ══ Conditions ════════════════════════════════════════════════════════════════
 
-// GET /api/admin/conditions
-router.get('/conditions', requireAdmin, (req, res) => {
-  const rows = db
-    .prepare('SELECT * FROM condition_mappings ORDER BY condition_name ASC')
-    .all();
+// Readable by all authenticated users — scheduler needs this to populate dropdowns
+router.get('/conditions', authenticate, (req, res) => {
+  const rows = db.prepare(`
+    SELECT id, name, category, audiogram_required, reasoning, is_active, updated_at, updated_by
+    FROM conditions
+    ORDER BY category ASC, name ASC
+  `).all();
   res.json(rows);
 });
 
-// POST /api/admin/conditions
 router.post('/conditions', requireAdmin, (req, res) => {
-  const { condition_name, general_ent, subspecialty, subspecialty_preferred, notes } = req.body;
+  const { name, category, audiogram_required = 'never', reasoning } = req.body;
 
-  if (!condition_name || !condition_name.trim()) {
-    return res.status(400).json({ error: 'condition_name is required' });
+  if (!name?.trim()) return res.status(400).json({ error: 'name is required' });
+
+  const validCategories = [
+    'general_ent', 'sleep', 'head_neck', 'neurotology',
+    'laryngology', 'facial_plastics', 'pediatric', 'allergy',
+  ];
+  if (!validCategories.includes(category)) {
+    return res.status(400).json({ error: `category must be one of: ${validCategories.join(', ')}` });
   }
+  if (!['always', 'sometimes', 'never'].includes(audiogram_required)) {
+    return res.status(400).json({ error: 'audiogram_required must be always, sometimes, or never' });
+  }
+
+  const conflict = db.prepare('SELECT id FROM conditions WHERE name = ?').get(name.trim());
+  if (conflict) return res.status(409).json({ error: 'A condition with this name already exists' });
 
   const result = db.prepare(`
-    INSERT INTO condition_mappings
-      (condition_name, general_ent, subspecialty, subspecialty_preferred, notes, created_by)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(
-    condition_name.trim().toLowerCase(),
-    general_ent ? 1 : 0,
-    subspecialty?.trim() || null,
-    subspecialty_preferred ? 1 : 0,
-    notes?.trim() || null,
-    req.user.username,
-  );
+    INSERT INTO conditions (name, category, audiogram_required, reasoning, updated_by)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(name.trim(), category, audiogram_required, reasoning?.trim() || null, req.user.username);
 
-  const created = db.prepare('SELECT * FROM condition_mappings WHERE id = ?').get(result.lastInsertRowid);
-  res.status(201).json(created);
+  res.status(201).json(db.prepare('SELECT * FROM conditions WHERE id = ?').get(result.lastInsertRowid));
 });
 
-// PUT /api/admin/conditions/:id
 router.put('/conditions/:id', requireAdmin, (req, res) => {
-  const { condition_name, general_ent, subspecialty, subspecialty_preferred, notes } = req.body;
-
-  if (!condition_name || !condition_name.trim()) {
-    return res.status(400).json({ error: 'condition_name is required' });
-  }
-
-  const existing = db.prepare('SELECT id FROM condition_mappings WHERE id = ?').get(req.params.id);
+  const existing = db.prepare('SELECT * FROM conditions WHERE id = ?').get(req.params.id);
   if (!existing) return res.status(404).json({ error: 'Condition not found' });
 
+  const {
+    name              = existing.name,
+    category          = existing.category,
+    audiogram_required = existing.audiogram_required,
+    reasoning         = existing.reasoning,
+    is_active         = existing.is_active,
+  } = req.body;
+
   db.prepare(`
-    UPDATE condition_mappings
-    SET condition_name = ?, general_ent = ?, subspecialty = ?,
-        subspecialty_preferred = ?, notes = ?
+    UPDATE conditions
+    SET name = ?, category = ?, audiogram_required = ?, reasoning = ?,
+        is_active = ?, updated_at = CURRENT_TIMESTAMP, updated_by = ?
     WHERE id = ?
   `).run(
-    condition_name.trim().toLowerCase(),
-    general_ent ? 1 : 0,
-    subspecialty?.trim() || null,
-    subspecialty_preferred ? 1 : 0,
-    notes?.trim() || null,
+    String(name).trim(),
+    category,
+    audiogram_required,
+    reasoning ? String(reasoning).trim() : null,
+    is_active ? 1 : 0,
+    req.user.username,
     req.params.id,
   );
 
-  const updated = db.prepare('SELECT * FROM condition_mappings WHERE id = ?').get(req.params.id);
-  res.json(updated);
+  res.json(db.prepare('SELECT * FROM conditions WHERE id = ?').get(req.params.id));
 });
 
-// DELETE /api/admin/conditions/:id
-router.delete('/conditions/:id', requireAdmin, (req, res) => {
-  const existing = db.prepare('SELECT id FROM condition_mappings WHERE id = ?').get(req.params.id);
-  if (!existing) return res.status(404).json({ error: 'Condition not found' });
+// ══ Providers ═════════════════════════════════════════════════════════════════
 
-  db.prepare('DELETE FROM condition_mappings WHERE id = ?').run(req.params.id);
-  res.json({ message: 'Deleted successfully' });
+// Readable by all authenticated users
+router.get('/providers', authenticate, (req, res) => {
+  const rows = db.prepare(`
+    SELECT p.*, s.name AS supervising_name
+    FROM providers p
+    LEFT JOIN providers s ON p.supervising_provider_id = s.id
+    ORDER BY
+      CASE p.title WHEN 'MD' THEN 0 WHEN 'DO' THEN 1 ELSE 2 END ASC,
+      p.name ASC
+  `).all();
+
+  res.json(rows.map(p => ({ ...p, locations: JSON.parse(p.locations || '[]') })));
+});
+
+router.post('/providers', requireAdmin, (req, res) => {
+  const { name, title, specialty, supervising_provider_id, locations = [], general_notes } = req.body;
+
+  if (!name?.trim()) return res.status(400).json({ error: 'name is required' });
+  if (!['MD', 'DO', 'PA', 'NP', 'SLP'].includes(title)) {
+    return res.status(400).json({ error: 'title must be MD, DO, PA, NP, or SLP' });
+  }
+
+  const result = db.prepare(`
+    INSERT INTO providers (name, title, specialty, supervising_provider_id, locations, general_notes)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    name.trim(),
+    title,
+    specialty?.trim() || null,
+    supervising_provider_id || null,
+    JSON.stringify(Array.isArray(locations) ? locations : []),
+    general_notes?.trim() || null,
+  );
+
+  const created = db.prepare('SELECT * FROM providers WHERE id = ?').get(result.lastInsertRowid);
+  res.status(201).json({ ...created, locations: JSON.parse(created.locations || '[]') });
+});
+
+router.put('/providers/:id', requireAdmin, (req, res) => {
+  const existing = db.prepare('SELECT * FROM providers WHERE id = ?').get(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'Provider not found' });
+
+  const { name, title, specialty, supervising_provider_id, locations, general_notes, is_active, show_in_recs } = req.body;
+
+  db.prepare(`
+    UPDATE providers
+    SET name = ?, title = ?, specialty = ?, supervising_provider_id = ?,
+        locations = ?, general_notes = ?, is_active = ?, show_in_recs = ?,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(
+    name?.trim()      ?? existing.name,
+    title             ?? existing.title,
+    specialty?.trim() ?? existing.specialty,
+    supervising_provider_id !== undefined
+      ? (supervising_provider_id || null)
+      : existing.supervising_provider_id,
+    Array.isArray(locations) ? JSON.stringify(locations) : existing.locations,
+    general_notes !== undefined ? (general_notes?.trim() || null) : existing.general_notes,
+    is_active !== undefined ? (is_active ? 1 : 0) : existing.is_active,
+    show_in_recs !== undefined ? (show_in_recs ? 1 : 0) : existing.show_in_recs,
+    req.params.id,
+  );
+
+  const updated = db.prepare('SELECT * FROM providers WHERE id = ?').get(req.params.id);
+  res.json({ ...updated, locations: JSON.parse(updated.locations || '[]') });
+});
+
+// ══ Provider Preferences ══════════════════════════════════════════════════════
+
+// GET /api/admin/providers/:id/preferences
+router.get('/providers/:id/preferences', requireAdmin, (req, res) => {
+  const provider = db.prepare('SELECT id, name FROM providers WHERE id = ?').get(req.params.id);
+  if (!provider) return res.status(404).json({ error: 'Provider not found' });
+
+  const prefs = db.prepare(`
+    SELECT pp.condition_id, pp.preference, pp.scheduling_note,
+           c.name AS condition_name, c.category
+    FROM provider_preferences pp
+    JOIN conditions c ON c.id = pp.condition_id
+    WHERE pp.provider_id = ?
+    ORDER BY c.category ASC, c.name ASC
+  `).all(req.params.id);
+
+  res.json({ provider_id: provider.id, provider_name: provider.name, preferences: prefs });
+});
+
+// PUT /api/admin/providers/:id/preferences
+// Replaces the entire preference set for a provider.
+// Body: { want: [condition_id, ...], avoid: [condition_id, ...], notes: { condition_id: "note" } }
+router.put('/providers/:id/preferences', requireAdmin, (req, res) => {
+  const provider = db.prepare('SELECT id FROM providers WHERE id = ?').get(req.params.id);
+  if (!provider) return res.status(404).json({ error: 'Provider not found' });
+
+  const { want = [], avoid = [], notes = {} } = req.body;
+
+  db.transaction(() => {
+    db.prepare('DELETE FROM provider_preferences WHERE provider_id = ?').run(req.params.id);
+
+    const insert = db.prepare(`
+      INSERT INTO provider_preferences (provider_id, condition_id, preference, scheduling_note, updated_by)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    for (const condId of want) {
+      insert.run(req.params.id, condId, 'want', notes[condId] || null, req.user.username);
+    }
+    for (const condId of avoid) {
+      insert.run(req.params.id, condId, 'avoid', notes[condId] || null, req.user.username);
+    }
+  })();
+
+  const updated = db.prepare(`
+    SELECT pp.condition_id, pp.preference, pp.scheduling_note,
+           c.name AS condition_name, c.category
+    FROM provider_preferences pp
+    JOIN conditions c ON c.id = pp.condition_id
+    WHERE pp.provider_id = ?
+    ORDER BY c.category ASC, c.name ASC
+  `).all(req.params.id);
+
+  res.json({ provider_id: Number(req.params.id), preferences: updated });
+});
+
+// PATCH /api/admin/providers/:providerId/preferences/:conditionId
+// Update a single condition preference. preference='neutral' removes the row.
+router.patch('/providers/:providerId/preferences/:conditionId', requireAdmin, (req, res) => {
+  const { preference, scheduling_note } = req.body;
+
+  if (preference && !['want', 'avoid', 'neutral'].includes(preference)) {
+    return res.status(400).json({ error: 'preference must be want, avoid, or neutral' });
+  }
+
+  if (!preference || preference === 'neutral') {
+    db.prepare('DELETE FROM provider_preferences WHERE provider_id = ? AND condition_id = ?')
+      .run(req.params.providerId, req.params.conditionId);
+  } else {
+    db.prepare(`
+      INSERT INTO provider_preferences (provider_id, condition_id, preference, scheduling_note, updated_by)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(provider_id, condition_id) DO UPDATE SET
+        preference      = excluded.preference,
+        scheduling_note = excluded.scheduling_note,
+        updated_at      = CURRENT_TIMESTAMP,
+        updated_by      = excluded.updated_by
+    `).run(
+      req.params.providerId,
+      req.params.conditionId,
+      preference,
+      scheduling_note ?? null,
+      req.user.username,
+    );
+  }
+
+  res.json({ message: 'Preference updated' });
+});
+
+// ══ Assignments Log ═══════════════════════════════════════════════════════════
+
+const PAGE_SIZE = 25;
+
+function buildAssignmentWhere(query) {
+  const clauses = [];
+  const params = [];
+
+  if (query.provider_id)  { clauses.push('a.provider_id = ?');        params.push(query.provider_id); }
+  if (query.condition_id) { clauses.push('a.condition_id = ?');        params.push(query.condition_id); }
+  if (query.location)     { clauses.push('a.location = ?');            params.push(query.location); }
+  if (query.scheduled_by) { clauses.push('u.username LIKE ?');         params.push(`%${query.scheduled_by}%`); }
+  if (query.startDate)    { clauses.push('DATE(a.scheduled_at) >= ?'); params.push(query.startDate); }
+  if (query.endDate)      { clauses.push('DATE(a.scheduled_at) <= ?'); params.push(query.endDate); }
+
+  return { where: clauses.length ? 'WHERE ' + clauses.join(' AND ') : '', params };
+}
+
+// GET /api/admin/assignments
+router.get('/assignments', requireAdmin, (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const { where, params } = buildAssignmentWhere(req.query);
+
+  const rows = db.prepare(`
+    SELECT a.id, a.scheduled_at, a.location, a.notes,
+           p.name  AS provider_name, p.title AS provider_title,
+           c.name  AS condition_name,
+           u.username AS scheduled_by_username
+    FROM assignments a
+    JOIN  providers p  ON p.id = a.provider_id
+    JOIN  conditions c ON c.id = a.condition_id
+    LEFT JOIN users u  ON u.id = a.scheduled_by
+    ${where}
+    ORDER BY a.scheduled_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, PAGE_SIZE, (page - 1) * PAGE_SIZE);
+
+  const total = db.prepare(`
+    SELECT COUNT(*) AS n
+    FROM assignments a
+    JOIN providers p ON p.id = a.provider_id
+    LEFT JOIN users u ON u.id = a.scheduled_by
+    ${where}
+  `).get(...params).n;
+
+  res.json({ rows, total, page, pageSize: PAGE_SIZE, totalPages: Math.ceil(total / PAGE_SIZE) });
+});
+
+// GET /api/admin/assignments/export
+router.get('/assignments/export', requireAdmin, (req, res) => {
+  const { where, params } = buildAssignmentWhere(req.query);
+
+  const rows = db.prepare(`
+    SELECT a.scheduled_at, p.name AS provider_name, p.title AS provider_title,
+           c.name AS condition_name, c.category,
+           a.location, u.username AS scheduled_by, a.notes
+    FROM assignments a
+    JOIN  providers p  ON p.id = a.provider_id
+    JOIN  conditions c ON c.id = a.condition_id
+    LEFT JOIN users u  ON u.id = a.scheduled_by
+    ${where}
+    ORDER BY a.scheduled_at DESC
+  `).all(...params);
+
+  const csv = stringify(rows, {
+    header: true,
+    columns: [
+      { key: 'scheduled_at',   header: 'Date/Time' },
+      { key: 'provider_name',  header: 'Provider' },
+      { key: 'provider_title', header: 'Title' },
+      { key: 'condition_name', header: 'Condition' },
+      { key: 'category',       header: 'Category' },
+      { key: 'location',       header: 'Location' },
+      { key: 'scheduled_by',   header: 'Scheduled By' },
+      { key: 'notes',          header: 'Notes' },
+    ],
+  });
+
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename="assignments.csv"');
+  res.send(csv);
 });
 
 // ══ User Management ═══════════════════════════════════════════════════════════
 
-// GET /api/admin/users
 router.get('/users', requireAdmin, (req, res) => {
   const users = db.prepare(
-    'SELECT id, username, email, role, is_active, created_at FROM users ORDER BY created_at ASC'
+    'SELECT id, username, email, role, is_active, created_at FROM users ORDER BY created_at ASC',
   ).all();
   res.json(users);
 });
 
-// POST /api/admin/users  — create user with temp password
 router.post('/users', requireAdmin, async (req, res) => {
   const { username, email, role, password } = req.body;
 
@@ -151,16 +382,15 @@ router.post('/users', requireAdmin, async (req, res) => {
 
   const hash = await hashPassword(password);
   const result = db.prepare(
-    'INSERT INTO users (username, email, password_hash, role, must_change_password) VALUES (?, ?, ?, ?, 1)'
+    'INSERT INTO users (username, email, password_hash, role, must_change_password) VALUES (?, ?, ?, ?, 1)',
   ).run(username.trim(), email.trim().toLowerCase(), hash, role);
 
   const created = db.prepare(
-    'SELECT id, username, email, role, is_active, created_at FROM users WHERE id = ?'
+    'SELECT id, username, email, role, is_active, created_at FROM users WHERE id = ?',
   ).get(result.lastInsertRowid);
   res.status(201).json(created);
 });
 
-// PUT /api/admin/users/:id/reset-password  — admin sets a new temp password
 router.put('/users/:id/reset-password', requireAdmin, async (req, res) => {
   const { password } = req.body;
   if (!password || password.length < 8) {
@@ -171,14 +401,12 @@ router.put('/users/:id/reset-password', requireAdmin, async (req, res) => {
   if (!user) return res.status(404).json({ error: 'User not found' });
 
   const hash = await hashPassword(password);
-  db.prepare(
-    'UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?'
-  ).run(hash, req.params.id);
+  db.prepare('UPDATE users SET password_hash = ?, must_change_password = 1 WHERE id = ?')
+    .run(hash, req.params.id);
 
   res.json({ message: 'Password reset. User will be prompted to change it on next login.' });
 });
 
-// PUT /api/admin/users/:id/deactivate
 router.put('/users/:id/deactivate', requireAdmin, (req, res) => {
   if (String(req.params.id) === String(req.user.id)) {
     return res.status(400).json({ error: 'You cannot deactivate your own account' });
@@ -190,7 +418,6 @@ router.put('/users/:id/deactivate', requireAdmin, (req, res) => {
   res.json({ message: 'User deactivated' });
 });
 
-// PUT /api/admin/users/:id/reactivate
 router.put('/users/:id/reactivate', requireAdmin, (req, res) => {
   const user = db.prepare('SELECT id FROM users WHERE id = ?').get(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
@@ -199,95 +426,27 @@ router.put('/users/:id/reactivate', requireAdmin, (req, res) => {
   res.json({ message: 'User reactivated' });
 });
 
-// ══ Allergy / Sinus Log ═══════════════════════════════════════════════════════
+// ══ Legacy: Allergy / Sinus Log (kept for backward compatibility) ═════════════
 
-const PAGE_SIZE = 25;
-
-function buildLogQuery(filters, forExport = false) {
-  const conditions = [];
+router.get('/allergy-log', requireAdmin, (req, res) => {
+  const page = Math.max(1, parseInt(req.query.page) || 1);
+  const clauses = [];
   const params = [];
 
-  if (filters.startDate) {
-    conditions.push('DATE(logged_at) >= ?');
-    params.push(filters.startDate);
+  if (req.query.startDate) { clauses.push('DATE(logged_at) >= ?'); params.push(req.query.startDate); }
+  if (req.query.endDate)   { clauses.push('DATE(logged_at) <= ?'); params.push(req.query.endDate); }
+  if (req.query.location)  { clauses.push('location_preference = ?'); params.push(req.query.location); }
+  if (req.query.provider)  { clauses.push('recommended_provider LIKE ?'); params.push(`%${req.query.provider}%`); }
+
+  const where = clauses.length ? 'WHERE ' + clauses.join(' AND ') : '';
+
+  try {
+    const rows  = db.prepare(`SELECT * FROM allergy_sinus_log ${where} ORDER BY logged_at DESC LIMIT ? OFFSET ?`).all(...params, PAGE_SIZE, (page - 1) * PAGE_SIZE);
+    const total = db.prepare(`SELECT COUNT(*) AS total FROM allergy_sinus_log ${where}`).get(...params).total;
+    res.json({ rows, total, page, pageSize: PAGE_SIZE, totalPages: Math.ceil(total / PAGE_SIZE) });
+  } catch {
+    res.json({ rows: [], total: 0, page: 1, pageSize: PAGE_SIZE, totalPages: 0 });
   }
-  if (filters.endDate) {
-    conditions.push('DATE(logged_at) <= ?');
-    params.push(filters.endDate);
-  }
-  if (filters.location) {
-    conditions.push('location_preference = ?');
-    params.push(filters.location);
-  }
-  if (filters.provider) {
-    conditions.push('recommended_provider LIKE ?');
-    params.push(`%${filters.provider}%`);
-  }
-
-  const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
-  const order = 'ORDER BY logged_at DESC';
-  const limit = forExport ? '' : `LIMIT ${PAGE_SIZE} OFFSET ${(Math.max(1, filters.page || 1) - 1) * PAGE_SIZE}`;
-
-  return {
-    sql: `SELECT * FROM allergy_sinus_log ${where} ${order} ${limit}`.trim(),
-    countSql: `SELECT COUNT(*) as total FROM allergy_sinus_log ${where}`.trim(),
-    params,
-  };
-}
-
-// GET /api/admin/allergy-log?startDate=&endDate=&location=&provider=&page=
-router.get('/allergy-log', requireAdmin, (req, res) => {
-  const filters = {
-    startDate: req.query.startDate || '',
-    endDate:   req.query.endDate   || '',
-    location:  req.query.location  || '',
-    provider:  req.query.provider  || '',
-    page:      parseInt(req.query.page) || 1,
-  };
-
-  const { sql, countSql, params } = buildLogQuery(filters);
-  const rows  = db.prepare(sql).all(...params);
-  const total = db.prepare(countSql).get(...params).total;
-
-  res.json({
-    rows,
-    total,
-    page: filters.page,
-    pageSize: PAGE_SIZE,
-    totalPages: Math.ceil(total / PAGE_SIZE),
-  });
-});
-
-// GET /api/admin/allergy-log/export  — CSV download (all matching rows, no pagination)
-router.get('/allergy-log/export', requireAdmin, (req, res) => {
-  const filters = {
-    startDate: req.query.startDate || '',
-    endDate:   req.query.endDate   || '',
-    location:  req.query.location  || '',
-    provider:  req.query.provider  || '',
-  };
-
-  const { sql, params } = buildLogQuery(filters, true);
-  const rows = db.prepare(sql).all(...params);
-
-  const csv = stringify(rows, {
-    header: true,
-    columns: [
-      { key: 'logged_at',           header: 'Date/Time' },
-      { key: 'complaint',           header: 'Complaint' },
-      { key: 'location_preference', header: 'Location Preference' },
-      { key: 'patient_type',        header: 'Patient Type' },
-      { key: 'patient_age',         header: 'Age' },
-      { key: 'insurance',           header: 'Insurance' },
-      { key: 'recommended_provider',header: 'Recommended Provider' },
-      { key: 'recommended_location',header: 'Recommended Location' },
-      { key: 'scheduler_username',  header: 'Scheduler' },
-    ],
-  });
-
-  res.setHeader('Content-Type', 'text/csv');
-  res.setHeader('Content-Disposition', 'attachment; filename="allergy-sinus-log.csv"');
-  res.send(csv);
 });
 
 module.exports = router;
