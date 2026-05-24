@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import FlipCard from './FlipCard.jsx';
 import RatingBar from './RatingBar.jsx';
+import QuestionBox from './QuestionBox.jsx';
 import { processRating, getCardState, saveProgress, recordStudySession } from '../lib/srs.js';
 import { SUBCATEGORY_LABELS } from '../data/index.js';
 
@@ -96,7 +97,10 @@ export default function StudySession({ cards, direction, progress, onProgress, o
       />
 
       {revealed ? (
-        <RatingBar onRate={handleRate} />
+        <>
+          <RatingBar onRate={handleRate} />
+          <QuestionBox card={card} />
+        </>
       ) : (
         <p className="text-center text-sm text-slate-400">
           Tap the card to reveal the answer
