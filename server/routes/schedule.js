@@ -174,12 +174,22 @@ router.post('/symptom-bot', authenticate, async (req, res) => {
     return res.status(400).json({ error: 'condition_name is required' });
   }
 
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+  });
+
   try {
-    const reply = await runSymptomBot(messages, condition_name.trim());
-    res.json({ response: reply });
+    for await (const delta of runSymptomBot(messages, condition_name.trim())) {
+      res.write(`data: ${JSON.stringify({ type: 'delta', text: delta })}\n\n`);
+    }
+    res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
   } catch (err) {
     console.error('[SymptomBot] Error:', err.message);
-    res.status(502).json({ error: 'AI service unavailable. Please try again.' });
+    res.write(`data: ${JSON.stringify({ type: 'error', error: 'AI service unavailable. Please try again.' })}\n\n`);
+  } finally {
+    res.end();
   }
 });
 

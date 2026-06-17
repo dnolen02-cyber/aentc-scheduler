@@ -21,6 +21,13 @@ function parseResponse(text) {
   }
 }
 
+// Prefix of `text` that is safe to render mid-stream — strips a trailing
+// JSON block (complete or still in progress) so it never flashes on screen.
+function safeDisplayPrefix(text) {
+  const idx = text.lastIndexOf('{"_')
+  return idx === -1 ? text : text.slice(0, idx).trimEnd()
+}
+
 export default function Scheduler({ token, user, onLogout }) {
   const navigate = useNavigate()
 
@@ -41,6 +48,7 @@ export default function Scheduler({ token, user, onLogout }) {
   const [multiselectPicks, setMultiselectPicks] = useState([])
   const [textAnswer, setTextAnswer]       = useState('')
   const [botLoading, setBotLoading]       = useState(false)
+  const [streamingText, setStreamingText] = useState('')
 
   // ── Conditions list (for matching concluded condition name → id) ──────────
   const [conditions, setConditions] = useState([])
@@ -123,6 +131,9 @@ export default function Scheduler({ token, user, onLogout }) {
     setMultiselectPicks([])
     setTextAnswer('')
     setBotLoading(true)
+    setStreamingText('')
+
+    let accumulated = ''
 
     try {
       const res = await fetch('/api/schedule/symptom-bot', {
@@ -133,11 +144,42 @@ export default function Scheduler({ token, user, onLogout }) {
           condition_name: intakeSnap.current.description,
         }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Request failed')
 
-      const { display, block } = parseResponse(data.response)
-      const updatedHistory = [...newHistory, { role: 'assistant', content: data.response }]
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Request failed')
+      }
+
+      const reader  = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const parts = buffer.split('\n\n')
+        buffer = parts.pop()
+
+        for (const part of parts) {
+          const line = part.trim()
+          if (!line.startsWith('data: ')) continue
+          const payload = JSON.parse(line.slice(6))
+
+          if (payload.type === 'delta') {
+            accumulated += payload.text
+            const prefix = safeDisplayPrefix(accumulated)
+            setStreamingText(prefix)
+            if (prefix) setBotLoading(false)
+          } else if (payload.type === 'error') {
+            throw new Error(payload.error)
+          }
+        }
+      }
+
+      const { display, block } = parseResponse(accumulated)
+      const updatedHistory = [...newHistory, { role: 'assistant', content: accumulated }]
       setMessages(updatedHistory)
 
       // Only add a chat bubble if there is actual conversational text (not just the JSON block)
@@ -154,6 +196,7 @@ export default function Scheduler({ token, user, onLogout }) {
         { role: 'assistant', text: 'Something went wrong. Please try again.' },
       ])
     } finally {
+      setStreamingText('')
       setBotLoading(false)
     }
   }
@@ -453,6 +496,13 @@ export default function Scheduler({ token, user, onLogout }) {
                     </div>
                   )
                 ))}
+
+                {/* Live streaming bubble */}
+                {streamingText && (
+                  <div className="bg-aentc-pale rounded-xl rounded-tl-sm px-4 py-3 text-sm text-gray-800 leading-relaxed max-w-[88%]">
+                    {streamingText}
+                  </div>
+                )}
 
                 {/* Loading dots */}
                 {botLoading && (
