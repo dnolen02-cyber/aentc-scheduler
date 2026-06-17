@@ -198,12 +198,13 @@ Scheduler input: "Patient is having trouble breathing, throat feels like it's cl
 Good response:
 {"_done":{"condition":"Airway Concerns","also_consider":[],"reasoning":"Acute sensation of throat closing or difficulty breathing could represent an airway issue that needs immediate attention.","confident":true,"visit_label":"Airway concern — URGENT","urgent":true,"urgent_note":"Airway concerns require immediate attention. Please speak with a clinic provider right now. If the patient is having severe difficulty breathing, advise them to call 911 or go to the ER immediately."}}`;
 
-async function runSymptomBot(messages, patientDescription) {
-  const system = `${SYMPTOM_BOT_SYSTEM}
+async function* runSymptomBot(messages, patientDescription) {
+  const system = [
+    { type: 'text', text: SYMPTOM_BOT_SYSTEM, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: `The scheduler's initial description: "${patientDescription}"` },
+  ];
 
-The scheduler's initial description: "${patientDescription}"`;
-
-  const response = await client.messages.create({
+  const stream = client.messages.stream({
     model: 'claude-sonnet-4-6',
     max_tokens: 900,
     temperature: 0,
@@ -211,7 +212,11 @@ The scheduler's initial description: "${patientDescription}"`;
     messages,
   });
 
-  return response.content[0].text;
+  for await (const event of stream) {
+    if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+      yield event.delta.text;
+    }
+  }
 }
 
 module.exports = { runSymptomBot };
