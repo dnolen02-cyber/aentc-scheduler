@@ -180,13 +180,33 @@ router.post('/symptom-bot', authenticate, async (req, res) => {
     'Connection': 'keep-alive',
   });
 
+  // ── Timing instrumentation (Option A) ───────────────────────────────────────
+  // Logs how much of the perceived latency is real model time vs. environment.
+  //   ttft  = time-to-first-token (ms from request start to first streamed delta)
+  //   total = total ms until the stream finishes
+  //   chars = characters generated (rough proxy for output tokens)
+  const t0 = Date.now();
+  let tFirst = null;
+  let chars = 0;
+  const turn = messages.length; // conversation depth for context
+
   try {
     for await (const delta of runSymptomBot(messages, condition_name.trim())) {
+      if (tFirst === null) tFirst = Date.now();
+      chars += delta.length;
       res.write(`data: ${JSON.stringify({ type: 'delta', text: delta })}\n\n`);
     }
     res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
+
+    const ttft = tFirst === null ? null : tFirst - t0;
+    const total = Date.now() - t0;
+    console.log(
+      `[SymptomBot][timing] turn=${turn} ttft=${ttft ?? 'n/a'}ms total=${total}ms ` +
+      `chars=${chars} gen=${tFirst === null ? 'n/a' : total - (tFirst - t0)}ms`,
+    );
   } catch (err) {
-    console.error('[SymptomBot] Error:', err.message);
+    const total = Date.now() - t0;
+    console.error(`[SymptomBot] Error after ${total}ms:`, err.message);
     res.write(`data: ${JSON.stringify({ type: 'error', error: 'AI service unavailable. Please try again.' })}\n\n`);
   } finally {
     res.end();
