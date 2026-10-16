@@ -1,7 +1,39 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const fs = require('fs');
 
-const DB_PATH = path.join(__dirname, '../aentc.db');
+// ─── Database location ────────────────────────────────────────────────────────
+//
+// The app folder on Railway is rebuilt from scratch on every deploy, so a
+// database stored there is wiped each time. To persist data, attach a Volume
+// to the service in the Railway dashboard. Railway then sets
+// RAILWAY_VOLUME_MOUNT_PATH automatically and the database is stored there.
+//
+// Resolution order:
+//   1. DB_PATH env var (explicit override)
+//   2. <RAILWAY_VOLUME_MOUNT_PATH>/aentc.db (persistent volume attached)
+//   3. ./aentc.db next to the app (local dev — NOT persistent on Railway)
+
+function resolveDbPath() {
+  if (process.env.DB_PATH) return process.env.DB_PATH;
+  if (process.env.RAILWAY_VOLUME_MOUNT_PATH) {
+    return path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'aentc.db');
+  }
+  return path.join(__dirname, '../aentc.db');
+}
+
+const DB_PATH = resolveDbPath();
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+
+const persistent = !!(process.env.DB_PATH || process.env.RAILWAY_VOLUME_MOUNT_PATH);
+console.log(`[DB] Using ${DB_PATH}`);
+if (process.env.RAILWAY_ENVIRONMENT && !persistent) {
+  console.warn(
+    '[DB] WARNING: no volume attached — database will be wiped on every deploy. ' +
+    'Attach a Volume to this service in the Railway dashboard.',
+  );
+}
+
 const db = new Database(DB_PATH);
 
 db.pragma('journal_mode = WAL');
