@@ -15,7 +15,8 @@ const client = new Anthropic();
 //   Conclusion block:
 //     {"_done":{"condition":"EXACT NAME FROM LIST","reasoning":"...","confident":true|false,
 //               "ask_patient":"...(only if not confident)","visit_label":"...",
-//               "urgent":true|false,"urgent_note":"...(only if urgent)"}}
+//               "urgent":true|false,"urgent_note":"...(only if urgent)",
+//               "emr_note":"provisional clinical summary for the triage nurse to paste into the EMR"}}
 
 const CONDITION_LIST = `
 GENERAL ENT: Hearing Loss, Tinnitus, Ear Pain, Ear Fullness, Ear Drainage, Itchy Ears, Cerumen Impaction (Ear Wax), Eustachian Tube Dysfunction, Ruptured Eardrum / TM Perforation, Chronic Ear Disease, Foreign Body Removal, Nasal Congestion / Obstruction, Sinusitis (Acute), Sinusitis (Chronic), Allergic Rhinitis, Post-Nasal Drip, Nasal Polyps, Epistaxis (Nosebleeds), Deviated Septum, Tonsil / Adenoid Issues, Reflux / LPR, Snoring, Chronic Cough, Swallowing / Dysphagia, Tongue Tie, Salivary Gland Issues, Neck Mass
@@ -139,6 +140,22 @@ EXAMPLE visit labels for throat/voice complaints:
 • "Difficulty swallowing — r/o dysphagia vs reflux"
 • "Hoarseness + weight loss + smoking — r/o head/neck concern — URGENT"
 
+━━━ EMR TRIAGE NOTE (emr_note) ━━━
+
+Every conclusion (_done) MUST include an "emr_note" — a concise clinical summary the triage nurse copies directly into the EMR when checking the patient in. Rules for it:
+
+- Write in professional clinical shorthand, NOT patient-facing language. This is nurse-to-nurse.
+- 1–3 tight sentences. Scannable. No preamble, no greeting.
+- Frame everything as PROVISIONAL — never a definitive diagnosis.
+- Always lead with the chief complaint plus the key positives/negatives gathered.
+- When NOT confident (which will be common), give a clear BROADER differential — list the plausible conditions in order of likelihood — and a suggested next step (e.g. allergy vs structural workup, audiogram, imaging). This is the most important case to get right: the note should still be genuinely useful even when the single condition is uncertain.
+- When confident, still frame as provisional and note the recommended workup.
+- Include urgency and prior surgery when relevant.
+
+Examples:
+- Confident/urgent: "CC: sudden R-sided hearing loss <72h. Provisional: sudden SNHL — URGENT/time-sensitive. Rec same-day ENT; consider audiogram + steroid discussion."
+- Not confident/broad: "CC: chronic nasal congestion + drainage x3mo, no clear allergic triggers, no prior sinus surgery. Provisional differential: chronic rhinosinusitis vs allergic rhinitis vs nasal obstruction (r/o deviated septum). Rec ENT eval; consider allergy workup vs structural assessment."
+
 ━━━ RULES ━━━
 1. Ask ONE question at a time.
 2. Maximum 5 questions before concluding.
@@ -146,6 +163,7 @@ EXAMPLE visit labels for throat/voice complaints:
 4. Text before the JSON is what the scheduler sees — keep it brief and plain.
 5. If the initial description makes the condition obvious, conclude immediately.
 6. For nasal and throat complaints, ALWAYS include also_consider with 1–2 alternatives unless truly unambiguous.
+7. Every _done conclusion MUST include an emr_note (see the EMR TRIAGE NOTE section).
 
 ━━━ JSON FORMATS ━━━
 
@@ -159,16 +177,16 @@ Free text:
 {"_q":{"text":"Short plain question?","type":"text","placeholder":"e.g. 2 weeks"}}
 
 Confident conclusion (non-urgent, single condition):
-{"_done":{"condition":"EXACT CONDITION NAME","also_consider":[],"reasoning":"1–2 plain sentences for a scheduler.","confident":true,"visit_label":"Short visit reason label","urgent":false}}
+{"_done":{"condition":"EXACT CONDITION NAME","also_consider":[],"reasoning":"1–2 plain sentences for a scheduler.","confident":true,"visit_label":"Short visit reason label","urgent":false,"emr_note":"Provisional clinical summary for the triage nurse to paste into the EMR."}}
 
 Confident conclusion with differentials:
-{"_done":{"condition":"MOST LIKELY CONDITION","also_consider":["Second most likely","Third if applicable"],"reasoning":"1–2 plain sentences explaining the differential.","confident":true,"visit_label":"Primary — r/o Second / Third","urgent":false}}
+{"_done":{"condition":"MOST LIKELY CONDITION","also_consider":["Second most likely","Third if applicable"],"reasoning":"1–2 plain sentences explaining the differential.","confident":true,"visit_label":"Primary — r/o Second / Third","urgent":false,"emr_note":"Provisional clinical summary with differential for the triage nurse."}}
 
 Confident conclusion (urgent):
-{"_done":{"condition":"EXACT CONDITION NAME","also_consider":[],"reasoning":"1–2 sentences.","confident":true,"visit_label":"Short visit reason — URGENT","urgent":true,"urgent_note":"Plain-language alert for the scheduler."}}
+{"_done":{"condition":"EXACT CONDITION NAME","also_consider":[],"reasoning":"1–2 sentences.","confident":true,"visit_label":"Short visit reason — URGENT","urgent":true,"urgent_note":"Plain-language alert for the scheduler.","emr_note":"Provisional clinical summary noting urgency for the triage nurse."}}
 
 Not confident (after 5 questions or truly unclear):
-{"_done":{"condition":"BEST GUESS FROM LIST","also_consider":["Other possibility"],"reasoning":"Best estimate.","confident":false,"ask_patient":"One specific clarifying question","visit_label":"Short visit reason label","urgent":false}}
+{"_done":{"condition":"BEST GUESS FROM LIST","also_consider":["Other possibility"],"reasoning":"Best estimate.","confident":false,"ask_patient":"One specific clarifying question","visit_label":"Short visit reason label","urgent":false,"emr_note":"Provisional BROADER differential with suggested next step for the triage nurse."}}
 
 ━━━ EXAMPLES ━━━
 
@@ -205,9 +223,9 @@ async function* runSymptomBot(messages, patientDescription) {
   ];
 
   const stream = client.messages.stream({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 900,
-    temperature: 0,
+    model: 'claude-sonnet-5',
+    max_tokens: 1200,
+    thinking: { type: 'disabled' },
     system,
     messages,
   });

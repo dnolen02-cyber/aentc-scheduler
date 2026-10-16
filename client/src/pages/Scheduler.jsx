@@ -49,6 +49,7 @@ export default function Scheduler({ token, user, onLogout }) {
   const [textAnswer, setTextAnswer]       = useState('')
   const [botLoading, setBotLoading]       = useState(false)
   const [streamingText, setStreamingText] = useState('')
+  const [emrCopied, setEmrCopied]         = useState(false)
 
   // ── Conditions list (for matching concluded condition name → id) ──────────
   const [conditions, setConditions] = useState([])
@@ -215,6 +216,16 @@ export default function Scheduler({ token, user, onLogout }) {
     e.preventDefault()
     if (!textAnswer.trim()) return
     sendToBot(textAnswer.trim(), messages)
+  }
+
+  // ── Copy EMR triage note to clipboard ─────────────────────────────────────
+  function copyEmrNote(text) {
+    navigator.clipboard?.writeText(text)
+      .then(() => {
+        setEmrCopied(true)
+        setTimeout(() => setEmrCopied(false), 2000)
+      })
+      .catch(() => {})
   }
 
   // ── Find providers after conclusion ──────────────────────────────────────
@@ -581,6 +592,27 @@ export default function Scheduler({ token, user, onLogout }) {
                           {conclusion.ask_patient.replace(/^Ask the patient:\s*/i, '')}
                         </div>
                       )}
+
+                      {/* EMR triage note — copy-paste ready for the nurse at check-in */}
+                      {conclusion.emr_note && (
+                        <div className="bg-white border border-gray-300 rounded-lg p-3 mb-3">
+                          <div className="flex items-center justify-between mb-1.5">
+                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                              EMR triage note
+                            </p>
+                            <button
+                              onClick={() => copyEmrNote(conclusion.emr_note)}
+                              className="text-xs font-semibold text-aentc-dark hover:text-aentc-medium border border-gray-300 hover:border-aentc-medium px-2 py-1 rounded transition-colors"
+                            >
+                              {emrCopied ? 'Copied ✓' : 'Copy'}
+                            </button>
+                          </div>
+                          <p className="text-xs text-gray-700 leading-relaxed whitespace-pre-wrap font-mono">
+                            {conclusion.emr_note}
+                          </p>
+                        </div>
+                      )}
+
                       {phase !== 'results' && (
                         <button
                           onClick={findProviders}
